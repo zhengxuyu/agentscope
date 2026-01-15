@@ -22,6 +22,20 @@ from agentscope.tool import (
     view_text_file,
 )
 
+try:
+    import pandas as pd  # noqa: F401
+
+    PANDAS_AVAILABLE = True
+except ImportError:
+    PANDAS_AVAILABLE = False
+
+try:
+    import openpyxl  # noqa: F401
+
+    OPENPYXL_AVAILABLE = True
+except ImportError:
+    OPENPYXL_AVAILABLE = False
+
 
 class ResultModel(BaseModel):
     """
@@ -38,6 +52,217 @@ class ResultModel(BaseModel):
             "and the error message if any."
         ),
     )
+
+
+async def read_excel_file(
+    file_path: str,
+    sheet_name: str | None = None,
+    max_rows: int = 1000,
+    include_index: bool = False,
+) -> ToolResponse:
+    """Read and analyze an Excel (.xlsx, .xls) file.
+
+    This function can read Excel files and return their contents in a readable
+    text format. It supports multiple sheets and can limit the number of rows
+    returned to avoid overwhelming the context.
+
+    Args:
+        file_path (`str`):
+            The path to the Excel file to read. Can be an absolute or relative
+            path.
+        sheet_name (`str | None`, optional):
+            The name of the sheet to read. If None, reads the first sheet.
+            If "all", reads all sheets.
+        max_rows (`int`, defaults to 1000):
+            Maximum number of rows to return per sheet. This helps control
+            memory usage for large files.
+        include_index (`bool`, defaults to False):
+            Whether to include row indices in the output.
+
+    Returns:
+        `ToolResponse`:
+            A ToolResponse containing the Excel file contents as text blocks.
+    """
+    import os
+
+    if not os.path.exists(file_path):
+        return ToolResponse(
+            content=[
+                TextBlock(
+                    type="text",
+                    text=f"Error: File '{file_path}' does not exist.",
+                ),
+            ],
+        )
+
+    try:
+        if PANDAS_AVAILABLE:
+            # Use pandas for reading Excel files
+            if sheet_name == "all":
+                # Read all sheets
+                excel_file = pd.ExcelFile(file_path)
+                sheets_data = {}
+                for sheet in excel_file.sheet_names:
+                    df = pd.read_excel(excel_file, sheet_name=sheet, nrows=max_rows)
+                    sheets_data[sheet] = df
+
+                content_blocks = [
+                    TextBlock(
+                        type="text",
+                        text=f"Excel file '{file_path}' contains {len(sheets_data)} sheet(s):\n",
+                    ),
+                ]
+
+                for sheet_name_key, df in sheets_data.items():
+                    content_blocks.append(
+                        TextBlock(
+                            type="text",
+                            text=f"\n--- Sheet: {sheet_name_key} ({len(df)} rows) ---\n",
+                        ),
+                    )
+                    # Convert DataFrame to string representation
+                    df_str = df.to_string(index=include_index, max_rows=max_rows)
+                    content_blocks.append(
+                        TextBlock(
+                            type="text",
+                            text=df_str,
+                        ),
+                    )
+            else:
+                # Read specific sheet or first sheet
+                result = pd.read_excel(
+                    file_path,
+                    sheet_name=sheet_name,
+                    nrows=max_rows,
+                )
+
+                # Handle case where read_excel returns a dict (multiple sheets)
+                if isinstance(result, dict):
+                    # If dict is returned, use the first sheet or specified sheet
+                    if sheet_name and sheet_name in result:
+                        df = result[sheet_name]
+                    else:
+                        # Get first sheet from dict
+                        first_sheet = list(result.keys())[0]
+                        df = result[first_sheet]
+                        sheet_name = first_sheet
+                else:
+                    # Single DataFrame returned
+                    df = result
+
+                content_blocks = [
+                    TextBlock(
+                        type="text",
+                        text=f"Excel file '{file_path}' (Sheet: {sheet_name or 'first'}, {len(df)} rows):\n",
+                    ),
+                ]
+
+                # Convert DataFrame to string representation
+                df_str = df.to_string(index=include_index, max_rows=max_rows)
+                content_blocks.append(
+                    TextBlock(
+                        type="text",
+                        text=df_str,
+                    ),
+                )
+
+            return ToolResponse(content=content_blocks)
+
+        elif OPENPYXL_AVAILABLE:
+            # Use openpyxl as fallback
+            from openpyxl import load_workbook
+
+            wb = load_workbook(file_path, data_only=True)
+
+            if sheet_name == "all":
+                sheets_data = {}
+                for sheet in wb.sheetnames:
+                    ws = wb[sheet]
+                    rows = []
+                    for row_idx, row in enumerate(ws.iter_rows(values_only=True), 1):
+                        if row_idx > max_rows:
+                            break
+                        rows.append(row)
+                    sheets_data[sheet] = rows
+
+                content_blocks = [
+                    TextBlock(
+                        type="text",
+                        text=f"Excel file '{file_path}' contains {len(sheets_data)} sheet(s):\n",
+                    ),
+                ]
+
+                for sheet_name_key, rows in sheets_data.items():
+                    content_blocks.append(
+                        TextBlock(
+                            type="text",
+                            text=f"\n--- Sheet: {sheet_name_key} ({len(rows)} rows) ---\n",
+                        ),
+                    )
+                    # Convert rows to text
+                    rows_text = "\n".join(
+                        ["\t".join([str(cell) if cell is not None else "" for cell in row]) for row in rows]
+                    )
+                    content_blocks.append(
+                        TextBlock(
+                            type="text",
+                            text=rows_text,
+                        ),
+                    )
+            else:
+                # Read specific sheet or first sheet
+                ws = wb[sheet_name] if sheet_name else wb.active
+                rows = []
+                for row_idx, row in enumerate(ws.iter_rows(values_only=True), 1):
+                    if row_idx > max_rows:
+                        break
+                    rows.append(row)
+
+                content_blocks = [
+                    TextBlock(
+                        type="text",
+                        text=f"Excel file '{file_path}' (Sheet: {ws.title}, {len(rows)} rows):\n",
+                    ),
+                ]
+
+                # Convert rows to text
+                rows_text = "\n".join(
+                    ["\t".join([str(cell) if cell is not None else "" for cell in row]) for row in rows]
+                )
+                content_blocks.append(
+                    TextBlock(
+                        type="text",
+                        text=rows_text,
+                    ),
+                )
+
+            return ToolResponse(content=content_blocks)
+
+        else:
+            return ToolResponse(
+                content=[
+                    TextBlock(
+                        type="text",
+                        text=(
+                            "Error: Neither pandas nor openpyxl is available. "
+                            "Please install one of them to read Excel files:\n"
+                            "  pip install pandas\n"
+                            "  or\n"
+                            "  pip install openpyxl"
+                        ),
+                    ),
+                ],
+            )
+
+    except Exception as e:
+        return ToolResponse(
+            content=[
+                TextBlock(
+                    type="text",
+                    text=f"Error reading Excel file '{file_path}': {str(e)}",
+                ),
+            ],
+        )
 
 
 def _convert_to_text_block(msgs: list[Msg]) -> list[TextBlock]:
@@ -80,8 +305,7 @@ async def create_worker(
     if os.getenv("GAODE_API_KEY"):
         toolkit.create_tool_group(
             group_name="amap_tools",
-            description="Map-related tools, including geocoding, routing, and "
-            "place search.",
+            description="Map-related tools, including geocoding, routing, and " "place search.",
         )
         client = HttpStatelessClient(
             name="amap_mcp",
@@ -91,8 +315,7 @@ async def create_worker(
         await toolkit.register_mcp_client(client, group_name="amap_tools")
     else:
         print(
-            "Warning: GAODE_API_KEY not set in environment, skipping Gaode "
-            "MCP client registration.",
+            "Warning: GAODE_API_KEY not set in environment, skipping Gaode " "MCP client registration.",
         )
 
     # Browser MCP client
@@ -115,8 +338,7 @@ async def create_worker(
     if os.getenv("GITHUB_TOKEN"):
         toolkit.create_tool_group(
             group_name="github_tools",
-            description="GitHub related tools, including repository "
-            "search and code file retrieval.",
+            description="GitHub related tools, including repository " "search and code file retrieval.",
         )
         github_client = HttpStatelessClient(
             name="github",
@@ -131,14 +353,16 @@ async def create_worker(
 
     else:
         print(
-            "Warning: GITHUB_TOKEN not set in environment, skipping GitHub "
-            "MCP client registration.",
+            "Warning: GITHUB_TOKEN not set in environment, skipping GitHub " "MCP client registration.",
         )
 
     # Basic read/write tools
     toolkit.register_tool_function(write_text_file)
     toolkit.register_tool_function(insert_text_file)
     toolkit.register_tool_function(view_text_file)
+
+    # Excel file reading tool
+    toolkit.register_tool_function(read_excel_file)
 
     # Create a new sub-agent to finish the given task
     sub_agent = ReActAgent(
