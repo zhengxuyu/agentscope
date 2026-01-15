@@ -32,18 +32,36 @@ export PYTHONUNBUFFERED=1
 # Set API key (make sure DASHSCOPE_API_KEY is set in your environment or .env file)
 # export DASHSCOPE_API_KEY="your-api-key-here"
 
-# Activate Python environment (adjust path as needed)
-# Option 1: Using conda
-# source activate agentscope
-
-# Option 2: Using venv
-# source /path/to/venv/bin/activate
-
-# Option 3: Using uv (if installed)
-# source .venv/bin/activate
-
-# Get script directory
+# Get script directory and project root
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Project root is 3 levels up from examples/agent/meta_planner_agent/
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+cd "$PROJECT_ROOT"
+
+# Activate Python environment from project directory
+# Priority: .venv (uv) > venv > conda
+if [ -d "$PROJECT_ROOT/.venv" ]; then
+    echo "Activating .venv from project root: $PROJECT_ROOT/.venv"
+    source "$PROJECT_ROOT/.venv/bin/activate"
+elif [ -d "$PROJECT_ROOT/venv" ]; then
+    echo "Activating venv from project root: $PROJECT_ROOT/venv"
+    source "$PROJECT_ROOT/venv/bin/activate"
+else
+    echo "Warning: No venv found in project root ($PROJECT_ROOT)"
+    echo "Available options:"
+    echo "  1. Create venv: python -m venv .venv"
+    echo "  2. Or use uv: uv venv"
+    echo "  3. Or use conda: source activate agentscope"
+    echo ""
+    echo "Falling back to system Python..."
+fi
+
+# Verify Python environment
+echo "Python path: $(which python)"
+echo "Python version: $(python --version)"
+echo "Working directory: $(pwd)"
+
+# Change back to script directory for running the test
 cd "$SCRIPT_DIR"
 
 # Create logs directory if it doesn't exist
@@ -62,8 +80,9 @@ API_KEY=${9:-""}              # API key (optional)
 SGLANG_PORT=${10:-"30000"}    # Port for sglang server (default: 30000)
 SGLANG_MODEL_PATH=${11:-""}   # Model path for sglang (optional, uses MODEL_NAME if not set)
 
-# Build command
-CMD="uv run python test_gaia.py --result_dir $RESULT_DIR --model_type $MODEL_TYPE"
+# Build command - use python directly since we're already in venv
+# If uv is preferred, you can change this to "uv run python"
+CMD="python test_gaia.py --result_dir $RESULT_DIR --model_type $MODEL_TYPE"
 
 if [ -n "$SAMPLE_IDX" ]; then
     CMD="$CMD --sample_idx $SAMPLE_IDX"
@@ -113,10 +132,12 @@ if [ "$MODEL_TYPE" = "sglang" ]; then
     echo "Port: $SGLANG_PORT"
     echo "API base: $API_BASE"
     
-    # Check if sglang is available
-    if ! command -v python -m sglang.launch_server &> /dev/null; then
-        echo "Error: sglang is not installed or not in PATH"
+    # Check if sglang is available (use python from activated venv)
+    if ! python -m sglang.launch_server --help &> /dev/null; then
+        echo "Error: sglang is not installed in the current Python environment"
+        echo "Current Python: $(which python)"
         echo "Install with: pip install sglang[all]"
+        echo "Or if using uv: uv pip install 'sglang[all]'"
         exit 1
     fi
     
