@@ -1,12 +1,12 @@
-# -*- coding: utf-8 -*-
 """The planner agent example."""
+
 import asyncio
 import json
 import os
 from argparse import ArgumentParser
 from pathlib import Path
 
-from tool import create_worker, read_excel_file
+from tool import create_worker
 
 from agentscope.agent import ReActAgent
 from agentscope.formatter import DashScopeChatFormatter, OpenAIChatFormatter
@@ -111,9 +111,14 @@ async def process_sample(
             if content_blocks and len(content_blocks) > 0 and content_blocks[0].get("type") == "text":
                 # Update the existing text block to include file information with full path
                 existing_text = content_blocks[0].get("text", question) or question
+                file_info = (
+                    f"{existing_text}\n\n"
+                    f"Attached file: {file_name or os.path.basename(file_path)}\n"
+                    f"File path: {file_path}"
+                )
                 content_blocks[0] = TextBlock(
                     type="text",
-                    text=f"{existing_text}\n\nAttached file: {file_name or os.path.basename(file_path)}\nFile path: {file_path}",
+                    text=file_info,
                 )
             elif not content_blocks:
                 # No text block yet, create one with file info including full path
@@ -141,9 +146,14 @@ async def process_sample(
             if content_blocks and len(content_blocks) > 0 and content_blocks[0].get("type") == "text":
                 # Update the existing text block to include file information with full path
                 existing_text = content_blocks[0].get("text", question) or question
+                file_info = (
+                    f"{existing_text}\n\n"
+                    f"Attached file: {file_name or os.path.basename(file_path)}\n"
+                    f"File path: {file_path}"
+                )
                 content_blocks[0] = TextBlock(
                     type="text",
-                    text=f"{existing_text}\n\nAttached file: {file_name or os.path.basename(file_path)}\nFile path: {file_path}",
+                    text=file_info,
                 )
             elif not content_blocks:
                 # No text block yet, create one with file info including full path
@@ -171,9 +181,32 @@ async def process_sample(
         print(f"[Sample {sample_idx}] File path: {file_path}")
 
     try:
+        # Debug: Check available tools before calling planner
+        available_tools = planner.toolkit.get_json_schemas()
+        print(f"[Sample {sample_idx}] Available tools: {[t.get('function', {}).get('name') for t in available_tools]}")
+
         msg = await planner(msg)
+
+        # Debug: Check message content blocks
+        all_blocks = msg.get_content_blocks()
+        print(f"[Sample {sample_idx}] Total content blocks: {len(all_blocks)}")
+        for i, block in enumerate(all_blocks):
+            block_type = block.get("type", "unknown")
+            print(f"[Sample {sample_idx}] Block {i}: type={block_type}")
+            if block_type == "tool_use":
+                print(f"[Sample {sample_idx}]   Tool name: {block.get('name')}")
+                print(f"[Sample {sample_idx}]   Tool input: {block.get('input')}")
+
+        # Debug: Check if message contains tool_use blocks
+        tool_use_blocks = msg.get_content_blocks("tool_use")
+        print(f"[Sample {sample_idx}] Tool use blocks count: {len(tool_use_blocks)}")
+        for i, tool_block in enumerate(tool_use_blocks):
+            print(f"[Sample {sample_idx}] Tool {i}: {tool_block.get('name')}")
+
         answer = msg.get_text_content()
-        print(f"[Sample {sample_idx}] Answer: {answer}")
+        print(f"[Sample {sample_idx}] Answer length: {len(answer) if answer else 0}")
+        if answer:
+            print(f"[Sample {sample_idx}] Answer preview: {answer[:500]}...")
 
         result = {
             "sample_idx": sample_idx,
@@ -250,7 +283,10 @@ async def main() -> None:
         "--model_name",
         type=str,
         default=None,
-        help="Model name. For dashscope: qwen3-max (default). For sglang/openai: model name (e.g., Qwen/Qwen2.5-8B-Instruct)",
+        help=(
+            "Model name. For dashscope: qwen3-max (default). "
+            "For sglang/openai: model name (e.g., Qwen/Qwen2.5-8B-Instruct)"
+        ),
     )
     parser.add_argument(
         "--api_base",
@@ -262,18 +298,52 @@ async def main() -> None:
         "--api_key",
         type=str,
         default=None,
-        help="API key. For dashscope: DASHSCOPE_API_KEY env var. For sglang/openai: OPENAI_API_KEY env var or this argument.",
+        help=(
+            "API key. For dashscope: DASHSCOPE_API_KEY env var. "
+            "For sglang/openai: OPENAI_API_KEY env var or this argument."
+        ),
     )
     args = parser.parse_args()
 
     # Download or load dataset
-    if args.data_dir:
-        data_dir = args.data_dir
-    else:
-        data_dir = snapshot_download(repo_id="gaia-benchmark/GAIA", repo_type="dataset")
+    try:
+        if args.data_dir:
+            data_dir = args.data_dir
+            print(f"Using local data directory: {data_dir}")
+        else:
+            print("Downloading GAIA dataset from Hugging Face...")
+            try:
+                data_dir = snapshot_download(repo_id="gaia-benchmark/GAIA", repo_type="dataset")
+                print(f"Dataset downloaded to: {data_dir}")
+            except Exception as e:
+                print(f"❌ Failed to download dataset: {e}")
+                print("\nPossible reasons:")
+                print("1. Network connection issue - check your internet connection")
+                print("2. Need to accept access terms at: https://huggingface.co/datasets/gaia-benchmark/GAIA")
+                print("3. Authentication issue - run: hf auth login")
+                print("4. Firewall or proxy blocking the connection")
+                print("\nYou can use --data_dir to specify a local dataset directory instead.")
+                raise
 
-    ds = load_dataset(data_dir, "2023_all", split="validation")
-    total_samples = len(ds)
+        print(f"Loading dataset from: {data_dir}")
+        ds = load_dataset(data_dir, "2023_all", split="validation")
+        total_samples = len(ds)
+
+        if total_samples == 0:
+            print("❌ Warning: Dataset loaded but contains 0 samples!")
+            print(f"Data directory: {data_dir}")
+            print("Please check:")
+            print("1. If using --data_dir, verify the directory contains valid GAIA dataset files")
+            print("2. If downloading, the download may have failed or been incomplete")
+            raise ValueError("Dataset contains 0 samples")
+
+        print(f"✅ Successfully loaded dataset with {total_samples} samples")
+    except Exception as e:
+        print(f"❌ Error loading dataset: {e}")
+        import traceback
+
+        traceback.print_exc()
+        raise
 
     # Connect to the studio for better visualization (optional)
     # import agentscope
@@ -281,15 +351,6 @@ async def main() -> None:
     #     project="meta_planner_agent",
     #     studio_url="http://localhost:3000",
     # )
-
-    toolkit = Toolkit()
-    toolkit.register_tool_function(create_worker)
-    toolkit.register_tool_function(read_excel_file)
-
-    # Register xlsx skill if available
-    skill_dir = "./.claude/skills/xlsx"
-    if os.path.exists(skill_dir):
-        toolkit.register_agent_skill(skill_dir)
 
     # Configure model based on model_type
     if args.model_type == "dashscope":
@@ -321,15 +382,25 @@ async def main() -> None:
         formatter = OpenAIChatFormatter()
     else:
         raise ValueError(f"Unsupported model_type: {args.model_type}")
+    toolkit = Toolkit()
+    toolkit.register_tool_function(create_worker)
+    # toolkit.register_tool_function(read_excel_file)
 
+    # # Register xlsx skill if available
+    # skill_dir = "./.claude/skills"
+    # if os.path.exists(skill_dir):
+    #     for skill_file in os.listdir(skill_dir):
+    #         if skill_file.endswith(".md"):
+    #             skill_path = os.path.join(skill_dir, skill_file)
+    #             toolkit.register_agent_skill(skill_path)
     planner = ReActAgent(
         name="Friday",
-        # pylint: disable=C0301
         sys_prompt="""You are Friday, a multifunctional agent that can help people solving different complex tasks. You act like a meta planner to solve complicated tasks by decomposing the task and building/orchestrating different worker agents to finish the sub-tasks.
 
 ## Core Mission
-Your primary purpose is to break down complicated tasks into manageable subtasks (a plan), create worker agents to finish the subtask, and coordinate their execution to achieve the user's goal efficiently.
-
+Your primary purpose is to break down complicated tasks into manageable subtasks (a plan),
+create worker agents to finish the subtask, and coordinate their execution to achieve the user's goal efficiently.
+Sub-agents are equipped with various tools to handle different types of tasks.
 ### Important Constraints
 1. DO NOT TRY TO SOLVE THE SUBTASKS DIRECTLY yourself.
 2. Always follow the plan sequence.
@@ -357,6 +428,21 @@ Your primary purpose is to break down complicated tasks into manageable subtasks
     print(f"Processing {len(sample_indices)} sample(s) from GAIA validation set")
     print(f"Total samples in dataset: {total_samples}")
     print(f"Sample indices: {sample_indices}")
+
+    # Check if there are any samples to process
+    if len(sample_indices) == 0:
+        print("❌ No samples to process!")
+        print("\nPossible reasons:")
+        if args.sample_idx is not None:
+            print(f"1. Specified sample index {args.sample_idx} is out of range (total: {total_samples})")
+            print(f"   Valid range: 0 to {total_samples - 1}")
+        else:
+            print(f"1. Start index {args.start_idx} is >= total samples ({total_samples})")
+            if args.end_idx is not None:
+                print(f"2. End index {args.end_idx} is <= start index {args.start_idx}")
+            print(f"   Valid range: 0 to {total_samples - 1}")
+        print("\nPlease check your --sample_idx, --start_idx, or --end_idx parameters.")
+        return
 
     # Process each sample
     all_results = []

@@ -149,3 +149,15 @@ package-lock.json
 .wireit/
 .angular/
 *.ts
+examples/agent/meta_planner_agent/slurm_job.sh
+.gitignore
+examples/agent/meta_planner_agent/logs/*
+.gitignore
+uv.lock
+examples/agent/meta_planner_agent/*.pid
+examples/agent/meta_planner_agent/results/gaia/sample_00000.json
+examples/agent/meta_planner_agent/results/gaia/summary.json
+.gitignore
+.gitignore
+.vscode/settings.json
+.flake8

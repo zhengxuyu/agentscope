@@ -288,16 +288,35 @@ def _convert_to_text_block(msgs: list[Msg]) -> list[TextBlock]:
 async def create_worker(
     task_description: str,
 ) -> AsyncGenerator[ToolResponse, None]:
-    """Create a sub-worker to finish the given task.
+    """Create a sub-worker agent to finish the given task.
+
+    The sub-worker agent is equipped with various tools to handle different types of tasks:
+    - **Browser tools**: Web browsing, page navigation, content extraction from websites
+      (e.g., accessing arXiv.org, reading web pages, extracting information)
+    - **GitHub tools**: Repository search and code file retrieval
+    - **Map tools**: Geocoding, routing, and place search (if GAODE_API_KEY is set)
+    - **File tools**: Read, write, and view text files
+    - **Excel tools**: Read and analyze Excel files
+
+    Use this tool when you need to:
+    - Access websites or web pages (e.g., arXiv.org papers, online articles)
+    - Search GitHub repositories or retrieve code files
+    - Read or analyze files
+    - Perform web-based research or data extraction
 
     Args:
         task_description (`str`):
             The description of the task to be done by the sub-worker, should
-            contain all the necessary information.
+            contain all the necessary information. Be specific about:
+            - URLs to visit (if web access is needed)
+            - Files to read or analyze
+            - Specific information to extract or find
+            - Expected output format
 
     Returns:
         `AsyncGenerator[ToolResponse, None]`:
-            An async generator yielding ToolResponse objects.
+            An async generator yielding ToolResponse objects with the execution
+            process and final results.
     """
     toolkit = Toolkit()
 
